@@ -1,0 +1,154 @@
+%-----------------------------------------------------------------------------%
+ % Numerical Simulation of Radial Non-Newtonian Foam Flow in a Reservoir %
+ % Student: M. Bos %
+ % Supervisors: Prof.dr. W.R. Rossen & MSc. R.O. Salazar %
+ % June 2017 %
+ % Las updated August 2019 by R.O. Salazar %
+ %-----------------------------------------------------------------------------%
+
+ clear all
+ close all
+ clc
+
+ %% [1] INPUT
+muw=0.001; % Fluid property
+mug=0.00002; % Fluid property
+Krw00=0.39; % Corey parameter
+nw=2.86; % Corey parameter
+Krg00=0.59; % Corey parameter
+ng=0.70; % Corey parameter
+Swr=0.25; % Residual saturation
+Sgr=0.20; % Residual saturation
+fmmob=47700; % Foam model parameter
+epdry=400; % Foam model parameter
+fmdryrmax=0.271; % Foam model parameter
+rw=0.1; % Welbore radius
+rmax=100; % Reservoir radius
+C=1000; % Constant: Q/2pihK
+Pi=0; % Reference pressure at rmax
+n=1.34; % Power law fluid exponent.
+rn=350; % No. of grid points
+tmax=1.00; % Maximum dimensionless time
+dep=10; % [~7+] Factor of dependance: dt=(min(dx))/dep
+Pstep=50; % [25-75] Ratio between integrated rows for P and total rows
+visstep=2000; % [2000] Ratio between visualized rows and total rows
+%% [2] PREALLOCATION AND SETTING UP DEPENDENT PARAMETERS
+fprintf('Preallocation, please wait...\n')
+r=linspace(rw,rmax,rn);
+xn=rn;
+x=(r.^2-rw^2)/(rmax^2-rw^2);
+dx=zeros(1,xn-1);
+for i=1:xn-1;
+dx(i)=abs(x(i+1)-x(i));
+end
+dt=min(dx)/dep;
+tn=str2double(num2str(round((tmax/dt),0)+1));
+t=linspace(0,tmax,tn);
+tP=zeros(1,round(tn/Pstep,0));
+for j=1:tn/Pstep;
+tP(j)=t(j*Pstep);
+end
+P=zeros(round(tn/Pstep,0),xn);
+P(:,xn) = Pi;
+Pf=zeros(1,xn);
+Pf(1,xn) = Pi;
+dlP=zeros(1,round(tn/Pstep,0));
+Sw = zeros(tn,xn);
+Sw(1,:) = 1;
+Sw(2,:) = 1;
+fw = zeros(tn,xn);
+Krw=zeros(tn,xn);
+Krg0=zeros(tn,xn);
+Krg=zeros(tn,xn);
+C4=(fmdryrmax-Swr)/(rmax)^((n-1)/nw);
+fmdry=zeros(1,numel(r));
+for i=1:numel(r)
+fmdry(i)=Swr+C4*r(i)^((n-1)/nw);
+end
+clearvars i
+timestr=sprintf('n = %.2f, 0 < t < %.2f',n,tmax);
+timestr2=sprintf('%.2f',tmax);
+titlestr=sprintf('n = %.2f',n);
+%% [3] SOLVING NUMERICALLY FOR S_w & INTEGRATING THE RESULT FOR P
+for j=1:tn; %S_w, for-loop over time.
+for i=2:xn; %S_w, for-loop over space.
+Krw(j,i)=real(Krw00*((Sw(j,i)-Swr)/(1-Swr-Sgr)).^nw);
+Krw(j,1)=Krw(j,2);
+Krg0(j,i)=real(Krg00*((1-Sw(j,i)-Sgr)/(1-Swr-Sgr)).^ng);
+Krg(j,i)=Krg0(j,i)*(1+fmmob*((0.5+(atan(epdry*(Sw(j,i)-fmdry(i)))/pi))-(0.5+(atan(epdry*(Swr-fmdry(i)))/pi)))).^-1;
+Krg(j,1)=Krg(j,2);
+fw(j,i)=(Krw(j,i)/muw)/((Krg(j,i)/mug)+(Krw(j,i)/muw));
+Sw(j+1,i)=dt*((fw(j,i-1)-fw(j,i))/dx(1,i-1)) + Sw(j,i);
+Sw(j+1,1)=Sw(j+1,2);
+end
+fprintf('%.1f%% - Solving numerically for Sw - rn=%.f, t=%.2f \n',(j/tn)*100,xn,tmax)
+end
+for i=2:xn; % P_waterflood, for-loop over space.
+Pf(1,xn-i+1)=Pf(1,xn-i+2)+transpose(C*0.001*log(x(xn-i+2)/x(xn-i+1)));
+Pf(1,1)=Pf(1,2);
+fprintf('%.1f%% - Integrating for Pw - rn=%.f, t=%.2f \n',(i/xn)*100,xn,tmax)
+end
+for j=1:tn/Pstep; % P, for-loop over time.
+for i=2:xn; % P, for-loop over space.
+P(j,xn-i+1)=P(j,xn-i+2)+transpose(C*(1/(Krw(j*Pstep,xn-i+2)/muw+Krg(j*Pstep,xn-i+2)/mug)+1/(Krw(j*Pstep,xn-i+1)/muw+Krg(j*Pstep,xn-i+1)/mug))*0.5*log(x(xn-i+2)/x(xn-i+1)));
+P(j,1)=P(j,2);
+dlP(j)=(P(j,1)-P(j,xn))/(Pf(1,1)-Pf(1,xn)); % P_D
+end
+fprintf('%.1f%% - Integrating for P - rn=%.f, t=%.2f \n',(j*Pstep/tn)*100,xn,tmax)
+end
+clearvars i j
+%% [4] CORRECTING FOR NUMERICAL ARTIFACTS AT FOAM FRONT BY LOCAL MINIMA
+fprintf('Correcting numerical artifacts at foam front by local minima, pleasewait...\n')
+idlP=dlP*-1;
+[mindlP,mindlPlocs]=findpeaks(idlP);
+peaktP=tP(mindlPlocs);
+mindlP=mindlP*-1;
+fpeaktP(1)=tP(1);
+fpeaktP(2:numel(peaktP)+1)=peaktP;
+fmindlP(1)=peaktP(1);
+fmindlP(2:numel(mindlP)+1)=mindlP;
+%% [5] VISUALISATION OF CHANGES IN S_w OVER TIME AND SPACE
+fprintf('Visualizing resulting data, please wait...\n')
+f=figure(1);
+axes('Parent',f,'position',[0.13 0.39 0.77 0.54]);
+h=plot(x,Sw(1,:),'k','Marker','.','MarkerEdgeColor','k','MarkerSize',5);
+axis([0 1 0 1])
+ylabel('S_w')
+xlabel('x_D')
+title(timestr)
+c=uicontrol('Parent',f,'Style','slider','Position',[81,54,419,23],'Min',1,'Max',tn,'Value',1);
+cgcolor = f.Color;
+cl1 = uicontrol('Parent',f,'Style','text','Position',[50,54,23,23],'String','0','BackgroundColor',cgcolor);
+cl2 = uicontrol('Parent',f,'Style','text','Position',[500,54,23,23],'String',timestr2,'BackgroundColor',cgcolor);
+cl3 = uicontrol('Parent',f,'Style','text','Position',[240,25,100,23],'String','t= 0.00','BackgroundColor',cgcolor);
+c.Callback = @(es,ed) {set(cl3,'String',sprintf('t = %.2f',t(round(es.Value))));
+set(h,'Ydata',Sw(round(es.Value),:))};
+%% [6] VISUALISATION OF CHANGES IN P OVER TIME AND SPACE
+e=figure(2);
+axes('Parent',e,'position',[0.13 0.39 0.77 0.54]);
+n=plot(x,P(1,:),'k','Marker','.','MarkerEdgeColor','k','MarkerSize',5);
+hold on
+plot(x,Pf,'k','Marker','x','MarkerEdgeColor','k','MarkerSize',5)
+axis([0 1 Pi max(max(P(mindlPlocs(:))))])
+ylabel('P')
+xlabel('x_D')
+title(timestr)
+legend('P','P_W_a_t_e_r_f_l_o_o_d')
+s=uicontrol('Parent',e,'Style','slider','Position',[81,54,419,23],'Min',1,'Max',round(tn/Pstep),'Value',1);
+egcolor = e.Color;
+el1 = uicontrol('Parent',e,'Style','text','Position',[50,54,23,23],'String','0','BackgroundColor',egcolor);
+el2 = uicontrol('Parent',e,'Style','text','Position',[500,54,23,23],'String',timestr2,'BackgroundColor',egcolor);
+el3 = uicontrol('Parent',e,'Style','text','Position',[240,25,100,23],'String','t= 0.00','BackgroundColor',egcolor);
+s.Callback = @(es,ed) {set(el3,'String',sprintf('t = %.2f',t(round(es.Value)*Pstep)));
+set(n,'Ydata',P(round(es.Value),:))};
+%% [7] VISUALISATION OF CHANGES IN P_D OVER TIME
+figure(3)
+plot(tP(max(mindlPlocs):end),dlP(max(mindlPlocs):end),'k','LineWidth',0.75)
+hold on
+plot(tP(1:max(mindlPlocs)-1),dlP(1:max(mindlPlocs)-1),'LineStyle','none','Marker','o','MarkerSize',0.8,'MarkerEdgeColor','none','MarkerFaceColor','k')
+hold on
+plot(fpeaktP,fmindlP,'k','LineWidth',0.75)
+axis([0 max(t) 0 max(max(fmindlP))+0.1*max(max(fmindlP))])
+set(gca,'FontSize',24)
+xlabel('t_D','FontSize',28);
+ylabel('P_D','FontSize',28);
